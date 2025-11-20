@@ -1,18 +1,11 @@
-// Jenkinsfile
 pipeline {
     agent any
     
     tools {
-        // Убедитесь, что 'NodeJS_LTS' настроен в Global Tool Configuration
         nodejs 'NodeJS_LTS'
     }
     
     environment {
-        // Каждое объявление переменной должно быть на отдельной строке
-        BRANCH_LOWER = "${env.BRANCH_NAME.toLowerCase()}"
-        APP_PORT = '3000'
-        CONTAINER_NAME = "${BRANCH_LOWER}-app"
-        DOCKER_TAG = "${BRANCH_LOWER}:v1.0"
         DOCKER_REPO = "ekxtz/myrepostudy"
     }
     
@@ -20,36 +13,70 @@ pipeline {
         stage('Determine Environment & Port') {
             steps {
                 script {
-                    // Условная логика для установки порта
+                    env.BRANCH_LOWER = env.BRANCH_NAME.toLowerCase()
+
                     if (env.BRANCH_LOWER == 'dev') {
                         env.APP_PORT = '3001'
-                        echo "Running on DEV branch. Setting port to ${env.APP_PORT}."
+                        env.IMAGE_TAG = 'nodedev:v1.0'
                     } else if (env.BRANCH_LOWER == 'main') {
                         env.APP_PORT = '3000'
-                        echo "Running on MAIN branch. Setting port to ${env.APP_PORT}."
+                        env.IMAGE_TAG = 'nodemain:v1.0'
+                    } else {
+                        env.APP_PORT = '3002'
+                        env.IMAGE_TAG = "node-${env.BRANCH_LOWER}:latest"
                     }
+                    
+                    env.CONTAINER_NAME = "app-${env.BRANCH_LOWER}"
+                    
+                    echo "Running on ${env.BRANCH_NAME} branch. Port: ${env.APP_PORT}. Container: ${env.CONTAINER_NAME}"
                 }
             }
         }
         
         stage('Checkout & Build') {
             steps {
-                checkout scm
-                sh 'npm install'
+                dir('app') { 
+                    sh 'npm install'
+                }
             }
         }
         
         stage('Test') {
             steps {
-                sh 'echo "Running application tests..."'
+                dir('app') {
+                    sh 'npm test'
+                    echo "Running application tests..."
+                }
+            }
+        }
+
+        stage('Cleanup Old Docker Artifacts') {
+            steps {
+                sh "docker system prune -af"
+                echo "Docker cleanup complete."
             }
         }
         
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Tags image as 'nodemain:v1.0' or 'nodedev:v1.0'
-                    docker.build("node${BRANCH_LOWER}:v1.0", ".")
+                    docker.build("${env.IMAGE_TAG}", ".")
+                    echo "Docker image ${env.IMAGE_TAG} built successfully."
+                }
+            }
+        }
+        
+        stage('Push to DockerHub') {
+            when { expression { return env.BRANCH_LOWER == 'main' || env.BRANCH_LOWER == 'dev' } }
+            steps {
+                withDockerRegistry(credentialsId: 'docker-hub-credentials', url: '') {
+                    sh "docker tag ${env.IMAGE_TAG} ${env.DOCKER_REPO}:${env.GIT_COMMIT}"
+                    sh "docker push ${env.DOCKER_REPO}:${env.GIT_COMMIT}"
+
+                    sh "docker tag ${env.IMAGE_TAG} ${env.DOCKER_REPO}:latest"
+                    sh "docker push ${env.DOCKER_REPO}:latest"
+                    
+                    echo "Docker images pushed to Docker Hub."
                 }
             }
         }
@@ -57,38 +84,22 @@ pipeline {
         stage('Deploy (Local)') {
             steps {
                 script {
-                    // Остановка и удаление контейнера
+                    echo "Attempting to deploy ${env.IMAGE_TAG} to port ${env.APP_PORT}..."
+                    
                     sh "docker stop ${env.CONTAINER_NAME} || true"
                     sh "docker rm ${env.CONTAINER_NAME} || true"
                     
-                    // Развертывание
-                    sh "docker run -d --name ${env.CONTAINER_NAME} -p ${env.APP_PORT}:3000 node${BRANCH_LOWER}:v1.0"
+                    sh "docker run -d --name ${env.CONTAINER_NAME} -p ${env.APP_PORT}:3000 ${env.IMAGE_TAG}"
                     echo "Application deployed to http://localhost:${env.APP_PORT}"
                 }
             }
         }
         
-        // ADVANCED TASK: Push to DockerHub
-        stage('Push to DockerHub') {
-            when { expression { return env.BRANCH_LOWER == 'main' || env.BRANCH_LOWER == 'dev' } }
+        stage('Trigger Auto Deploy Pipeline') {
+            when { expression { return env.BRANCH_LOWER == 'main' } }
             steps {
-                // Requires 'docker-hub-credentials' ID set up in Jenkins
-                withDockerRegistry(credentialsId: 'docker-hub-credentials', url: '') {
-                    sh "docker tag node${BRANCH_LOWER}:v1.0 ${DOCKER_REPO}:${DOCKER_TAG}"
-                    sh "docker push ${DOCKER_REPO}:${DOCKER_TAG}"
-                }
-            }
-        }
-        
-        // ADVANCED TASK: Trigger subsequent deployment pipelines
-        // ВНИМАНИЕ: Пайплайны "Deploy_to_main" и "Deploy_to_dev" не существуют,
-        // поэтому этот этап вызовет сбой, пока вы их не создадите (Шаг 7).
-        stage('Trigger CD Pipeline') {
-            when { expression { return env.BRANCH_LOWER == 'main' || env.BRANCH_LOWER == 'dev' } }
-            steps {
-                // job: "${env.BRANCH_LOWER}__CD_deploy_manual", wait: false
-                // Использование имени из задания "CD_deploy_manual"
-                build job: "CD_deploy_manual", parameters: [[$class: 'StringParameterValue', name: 'BRANCH_TO_DEPLOY', value: env.BRANCH_LOWER]], wait: false
+                echo "Triggering auto deployment for main job: Deploy_to_main"
+                build job: 'Deploy_to_main', wait: false 
             }
         }
     }
