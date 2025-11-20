@@ -5,11 +5,11 @@ pipeline { agent any tools {
         nodejs 'NodeJS_LTS'
     }
     // Define environment variables based on branch
-    environment { BRANCH_LOWER = "${env.BRANCH_NAME.toLowerCase()}" APP_PORT 
-        = '3000' // Default/Main port CONTAINER_NAME = "${BRANCH_LOWER}-app"
+    environment { BRANCH_LOWER = "${env.BRANCH_NAME.toLowerCase()}" 
+                 APP_PORT = '3000' // Default/Main port CONTAINER_NAME = "${BRANCH_LOWER}-app"
         // Use specific naming pattern for Advanced Task
-        DOCKER_TAG = "${BRANCH_LOWER}:v1.0" DOCKER_REPO = 
-        "ekxtz/myrepostudy" 
+        DOCKER_TAG = "${BRANCH_LOWER}:v1.0" 
+                 DOCKER_REPO = "ekxtz/myrepostudy" 
     }
     stages { stage('Determine Environment & Port') { steps { script { if 
                     (env.BRANCH_LOWER == 'dev') {
