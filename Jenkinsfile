@@ -10,7 +10,7 @@ pipeline { agent any tools {
         = '3000' // Default/Main port CONTAINER_NAME = 
         "${BRANCH_LOWER}-app"
         // Use specific naming pattern for Advanced Task
-        DOCKER_TAG = "${BRANCH_LOWER}:v1.0" DOCKER_REPO = "ekxtz/app-repo" 
+        DOCKER_TAG = "${BRANCH_LOWER}:v1.0" DOCKER_REPO = "ekxtz/myrepostudy" 
         // <--- **UPDATE THIS**
     }
     stages { stage('Determine Environment & Port') { steps { script { if 
