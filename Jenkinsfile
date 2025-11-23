@@ -2,104 +2,110 @@ pipeline {
     agent any
     
     tools {
+        // Use the NodeJS tool configured in Jenkins Global Tools
         nodejs 'NodeJS_LTS'
     }
     
     environment {
-        DOCKER_REPO = "ekxtz/myrepostudy"
+        // Your Docker Hub repository
+        DOCKER_REPO = "ekxtz/myrepostudy" 
     }
     
     stages {
-        stage('Determine Environment & Port') {
+        // 1. Setup variables based on Branch Name
+        stage('Setup Variables') {
             steps {
                 script {
                     env.BRANCH_LOWER = env.BRANCH_NAME.toLowerCase()
-
-                    if (env.BRANCH_LOWER == 'dev') {
-                        env.APP_PORT = '3001'
-                        env.IMAGE_TAG = 'nodedev:v1.0'
-                    } else if (env.BRANCH_LOWER == 'main') {
+                    
+                    if (env.BRANCH_LOWER == 'main') {
                         env.APP_PORT = '3000'
-                        env.IMAGE_TAG = 'nodemain:v1.0'
+                        // Local tag for building
+                        env.LOCAL_BUILD_TAG = 'app-local:main'
+                        // Full tag for pushing to Docker Hub
+                        env.FULL_REPO_TAG = "${env.DOCKER_REPO}/nodemain:v1.0" 
                     } else {
-                        env.APP_PORT = '3002'
-                        env.IMAGE_TAG = "node-${env.BRANCH_LOWER}:latest"
+                        // For 'dev' and others
+                        env.APP_PORT = '3001'
+                        env.LOCAL_BUILD_TAG = 'app-local:dev'
+                        env.FULL_REPO_TAG = "${env.DOCKER_REPO}/nodedev:v1.0"
                     }
-                    
                     env.CONTAINER_NAME = "app-${env.BRANCH_LOWER}"
-                    
-                    echo "Running on ${env.BRANCH_NAME} branch. Port: ${env.APP_PORT}. Container: ${env.CONTAINER_NAME}"
+                    echo "Configured for Branch: ${env.BRANCH_NAME} | Port: ${env.APP_PORT}"
                 }
             }
         }
         
-        stage('Checkout & Build') {
+        // 2. Install Dependencies (npm)
+        stage('Install Dependencies') {
             steps {
-                dir('app') { 
+                // Change directory to 'app' where package.json is located
+                dir('app') {
                     sh 'npm install'
                 }
             }
         }
         
+        // 3. Run Tests
         stage('Test') {
             steps {
                 dir('app') {
+                    // Assumes 'test' script exists in package.json
                     sh 'npm test'
-                    echo "Running application tests..."
                 }
             }
         }
-
-        stage('Cleanup Old Docker Artifacts') {
+        
+        // 4. Build Docker Image
+        stage('Docker Build') {
             steps {
-                sh "docker system prune -af"
-                echo "Docker cleanup complete."
+                // Change to 'app' folder where Dockerfile is located
+                dir('app') {
+                    // Use --no-cache to ensure a clean build and avoid layer corruption issues
+                    sh "docker build --no-cache -t ${env.LOCAL_BUILD_TAG} ."
+                }
             }
         }
         
-        stage('Build Docker Image') {
+        // 5. Push Image to Docker Hub
+        stage('Push to Hub') {
             steps {
                 script {
-                    docker.build("${env.IMAGE_TAG}", ".")
-                    echo "Docker image ${env.IMAGE_TAG} built successfully."
+                    // Retry up to 3 times in case of network timeout
+                    retry(3) { 
+                        // Use the credentials ID configured in Jenkins
+                        withDockerRegistry(credentialsId: 'docker-hub-credentials', url: '') {
+                            
+                            // 1. Tag the local image with the full repo name
+                            sh "docker tag ${env.LOCAL_BUILD_TAG} ${env.FULL_REPO_TAG}"
+                            
+                            // 2. Push the specific version tag
+                            sh "docker push ${env.FULL_REPO_TAG}"
+                            
+                            // 3. For 'main' branch only: also push 'latest'
+                            if (env.BRANCH_LOWER == 'main') {
+                                sh "docker tag ${env.LOCAL_BUILD_TAG} ${env.DOCKER_REPO}:latest"
+                                sh "docker push ${env.DOCKER_REPO}:latest"
+                            }
+                        }
+                    }
                 }
             }
         }
         
-        stage('Push to DockerHub') {
-            when { expression { return env.BRANCH_LOWER == 'main' || env.BRANCH_LOWER == 'dev' } }
-            steps {
-                withDockerRegistry(credentialsId: 'docker-hub-credentials', url: '') {
-                    sh "docker tag ${env.IMAGE_TAG} ${env.DOCKER_REPO}:${env.GIT_COMMIT}"
-                    sh "docker push ${env.DOCKER_REPO}:${env.GIT_COMMIT}"
-
-                    sh "docker tag ${env.IMAGE_TAG} ${env.DOCKER_REPO}:latest"
-                    sh "docker push ${env.DOCKER_REPO}:latest"
-                    
-                    echo "Docker images pushed to Docker Hub."
-                }
-            }
-        }
-        
-        stage('Deploy (Local)') {
+        // 6. Local Deployment
+        stage('Deploy') {
             steps {
                 script {
-                    echo "Attempting to deploy ${env.IMAGE_TAG} to port ${env.APP_PORT}..."
+                    echo "Deploying container ${env.CONTAINER_NAME} on port ${env.APP_PORT}..."
                     
+                    // Stop and remove old container if it exists
                     sh "docker stop ${env.CONTAINER_NAME} || true"
-                    sh "docker rm ${env.CONTAINER_NAME} || true"
+            sh "docker rm ${env.CONTAINER_NAME} || true"
                     
-                    sh "docker run -d --name ${env.CONTAINER_NAME} -p ${env.APP_PORT}:3000 ${env.IMAGE_TAG}"
-                    echo "Application deployed to http://localhost:${env.APP_PORT}"
+                    // Run the new container
+                    sh "docker run -d --name ${env.CONTAINER_NAME} -p ${env.APP_PORT}:3000 ${env.FULL_REPO_TAG}"
                 }
-            }
-        }
-        
-        stage('Trigger Auto Deploy Pipeline') {
-            when { expression { return env.BRANCH_LOWER == 'main' } }
-            steps {
-                echo "Triggering auto deployment for main job: Deploy_to_main"
-                build job: 'Deploy_to_main', wait: false 
             }
         }
     }
