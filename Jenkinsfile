@@ -88,7 +88,7 @@ pipeline {
                     sh "docker tag ${env.IMAGE_TAG} ${DOCKER_REPO}/app:${GIT_COMMIT}"
                     sh "docker push ${env.IMAGE_TAG}"
                     sh "docker push ${DOCKER_REPO}/app:${GIT_COMMIT}"
-                    echo "Images pushed successfully to Docker Hub."
+echo "Images pushed successfully to Docker Hub."
                 }
             }
         }
@@ -119,3 +119,4 @@ pipeline {
         }
     }
 }
+            
