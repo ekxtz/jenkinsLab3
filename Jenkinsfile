@@ -2,17 +2,20 @@ pipeline {
     agent any
     
     tools {
-        // Use the NodeJS tool configured in Jenkins Global Tools
+        // Використовуйте інструмент NodeJS, налаштований у Jenkins Global Tools
         nodejs 'NodeJS_LTS'
     }
     
     environment {
-        // Your Docker Hub repository
+        // Ваш Docker Hub репозиторій
         DOCKER_REPO = "ekxtz/myrepostudy" 
+        // Примітка: змінні APP_PORT, LOCAL_BUILD_TAG, FULL_REPO_TAG та CONTAINER_NAME
+        // створюються динамічно на етапі 'Setup Variables'.
     }
     
     stages {
-        // 1. Setup variables based on Branch Name
+        
+        // 1. Налаштування змінних залежно від імені гілки
         stage('Setup Variables') {
             steps {
                 script {
@@ -20,12 +23,12 @@ pipeline {
                     
                     if (env.BRANCH_LOWER == 'main') {
                         env.APP_PORT = '3000'
-                        // Local tag for building
+                        // Локальний тег для збірки
                         env.LOCAL_BUILD_TAG = 'app-local:main'
-                        // Full tag for pushing to Docker Hub
+                        // Повний тег для відправки в Docker Hub
                         env.FULL_REPO_TAG = "${env.DOCKER_REPO}/nodemain:v1.0" 
                     } else {
-                        // For 'dev' and others
+                        // Для 'dev' та інших гілок
                         env.APP_PORT = '3001'
                         env.LOCAL_BUILD_TAG = 'app-local:dev'
                         env.FULL_REPO_TAG = "${env.DOCKER_REPO}/nodedev:v1.0"
@@ -36,53 +39,53 @@ pipeline {
             }
         }
         
-        // 2. Install Dependencies (npm)
+        // 2. Встановлення залежностей (npm)
         stage('Install Dependencies') {
             steps {
-                // Change directory to 'app' where package.json is located
+                // Перехід у каталог 'app', де розташовано package.json
                 dir('app') {
                     sh 'npm install'
                 }
             }
         }
         
-        // 3. Run Tests
+        // 3. Запуск тестів
         stage('Test') {
             steps {
                 dir('app') {
-                    // Assumes 'test' script exists in package.json
+                    // Припускається, що скрипт 'test' існує у package.json
                     sh 'npm test'
                 }
             }
         }
         
-        // 4. Build Docker Image
+        // 4. Збірка Docker-образу
         stage('Docker Build') {
             steps {
-                // Change to 'app' folder where Dockerfile is located
+                // Перехід у папку 'app', де розташовано Dockerfile
                 dir('app') {
-                    // Use --no-cache to ensure a clean build and avoid layer corruption issues
+                    // Використання --no-cache для чистої збірки
                     sh "docker build --no-cache -t ${env.LOCAL_BUILD_TAG} ."
                 }
             }
         }
         
-        // 5. Push Image to Docker Hub
+        // 5. Відправлення образу до Docker Hub
         stage('Push to Hub') {
             steps {
                 script {
-                    // Retry up to 3 times in case of network timeout
+                    // Повторити до 3 разів у разі мережевої помилки
                     retry(3) { 
-                        // Use the credentials ID configured in Jenkins
+                        // Використовуємо Jenkins Credentials ID
                         withDockerRegistry(credentialsId: 'docker-hub-credentials', url: '') {
                             
-                            // 1. Tag the local image with the full repo name
+                            // 1. Тегування локального образу повним репозиторним іменем
                             sh "docker tag ${env.LOCAL_BUILD_TAG} ${env.FULL_REPO_TAG}"
                             
-                            // 2. Push the specific version tag
+                            // 2. Відправлення тегу конкретної версії
                             sh "docker push ${env.FULL_REPO_TAG}"
                             
-                            // 3. For 'main' branch only: also push 'latest'
+                            // 3. Тільки для гілки 'main': також відправка 'latest'
                             if (env.BRANCH_LOWER == 'main') {
                                 sh "docker tag ${env.LOCAL_BUILD_TAG} ${env.DOCKER_REPO}:latest"
                                 sh "docker push ${env.DOCKER_REPO}:latest"
@@ -93,20 +96,34 @@ pipeline {
             }
         }
         
-        // 6. Local Deployment
+        // 6. Локальне розгортання для верифікації
         stage('Deploy') {
             steps {
                 script {
                     echo "Deploying container ${env.CONTAINER_NAME} on port ${env.APP_PORT}..."
                     
-                    // Stop and remove old container if it exists
+                    // Зупинка та видалення старого контейнера, якщо він існує
                     sh "docker stop ${env.CONTAINER_NAME} || true"
-            sh "docker rm ${env.CONTAINER_NAME} || true"
+                    sh "docker rm ${env.CONTAINER_NAME} || true"
                     
-                    // Run the new container
+                    // Запуск нового контейнера, мапінг порту
+                    // ${env.APP_PORT} (зовнішній) -> 3000 (внутрішній)
                     sh "docker run -d --name ${env.CONTAINER_NAME} -p ${env.APP_PORT}:3000 ${env.FULL_REPO_TAG}"
                 }
             }
         }
-    }
-}
+        
+        // 7. Автоматичний Trigger (викликає зовнішній job)
+        stage('Trigger Auto Deploy Pipeline') {
+            // Запускається тільки після успішної збірки у гілці 'main'
+            when { 
+                expression { return env.BRANCH_LOWER == 'main' } 
+            }
+            steps {
+                echo "Triggering auto deployment for main job: Deploy_to_main"
+                // Запуск окремого job'а 'Deploy_to_main' без очікування його завершення
+                build job: 'Deploy_to_main', wait: false 
+            }
+        }
+    } // Закриває блок stages {}
+} // Закриває блок pipeline {}
